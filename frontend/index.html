@@ -16,19 +16,119 @@
             justify-content: center;
             align-items: center;
         }
-        canvas {
+        #canvas {
             display: block;
             outline: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #textCanvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 2;
+            pointer-events: none;
+        }
+        #inputPanel {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 12px 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 200, 80, 0.4);
+            backdrop-filter: blur(8px);
+            transition: opacity 0.3s;
+        }
+        #inputPanel.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #blessingInput {
+            width: 260px;
+            padding: 8px 14px;
+            border: 1px solid rgba(255, 200, 80, 0.5);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #ffd666;
+            font-size: 16px;
+            outline: none;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        #blessingInput::placeholder {
+            color: rgba(255, 200, 80, 0.4);
+        }
+        #blessingInput:focus {
+            border-color: #ffd666;
+            box-shadow: 0 0 8px rgba(255, 200, 80, 0.3);
+        }
+        #launchBtn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #ff6b35, #ffd666);
+            color: #1a0a00;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            white-space: nowrap;
+        }
+        #launchBtn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 16px rgba(255, 107, 53, 0.6);
+        }
+        #launchBtn:active {
+            transform: scale(0.97);
+        }
+        #launchBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #errorMsg {
+            position: fixed;
+            bottom: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            color: #ff6b6b;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 8px 18px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 107, 107, 0.4);
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        #errorMsg.show {
+            opacity: 1;
         }
     </style>
 </head>
 <body>
     <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <canvas id="textCanvas"></canvas>
+    <div id="inputPanel">
+        <input type="text" id="blessingInput" placeholder="输入祝福语（最多20字）" maxlength="20" />
+        <button id="launchBtn">🎆 发射</button>
+    </div>
+    <div id="errorMsg"></div>
     <script>
         var Module = {
             canvas: (function() {
                 var canvas = document.getElementById('canvas');
-                // Make canvas full screen
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
                 return canvas;
@@ -37,13 +137,280 @@
                 console.log("烟花C模块已加载");
             }
         };
-        
+
         window.addEventListener('resize', function() {
             var canvas = document.getElementById('canvas');
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            var textCanvas = document.getElementById('textCanvas');
+            textCanvas.width = window.innerWidth;
+            textCanvas.height = window.innerHeight;
         });
     </script>
     <script src="fireworks.js"></script>
+    <script>
+    (function() {
+        var MAX_CHARS = 20;
+        var CHARS_PER_LINE = 10;
+        var MAX_LINES = 2;
+        var FONT_SIZE = 64;
+        var GATHER_DURATION = 1500;
+        var HOLD_DURATION = 2500;
+        var SCATTER_DURATION = 2000;
+        var PARTICLE_GAP = 3;
+
+        var textCanvas = document.getElementById('textCanvas');
+        var ctx = textCanvas.getContext('2d');
+        var blessingInput = document.getElementById('blessingInput');
+        var launchBtn = document.getElementById('launchBtn');
+        var errorMsg = document.getElementById('errorMsg');
+        var inputPanel = document.getElementById('inputPanel');
+
+        textCanvas.width = window.innerWidth;
+        textCanvas.height = window.innerHeight;
+
+        var particles = [];
+        var animating = false;
+        var animStartTime = 0;
+        var errorTimeout = null;
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorMsg.classList.add('show');
+            if (errorTimeout) clearTimeout(errorTimeout);
+            errorTimeout = setTimeout(function() {
+                errorMsg.classList.remove('show');
+            }, 2500);
+        }
+
+        function wrapText(text) {
+            var lines = [];
+            var i = 0;
+            while (i < text.length) {
+                lines.push(text.substring(i, i + CHARS_PER_LINE));
+                i += CHARS_PER_LINE;
+            }
+            return lines;
+        }
+
+        function extractTextPixels(text) {
+            var lines = wrapText(text);
+            var lineHeight = FONT_SIZE * 1.3;
+            var totalHeight = lines.length * lineHeight;
+            var maxLineWidth = 0;
+
+            var tempCanvas = document.createElement('canvas');
+            var tempCtx = tempCanvas.getContext('2d');
+            tempCtx.font = 'bold ' + FONT_SIZE + 'px "PingFang SC", "Microsoft YaHei", sans-serif';
+
+            for (var li = 0; li < lines.length; li++) {
+                var w = tempCtx.measureText(lines[li]).width;
+                if (w > maxLineWidth) maxLineWidth = w;
+            }
+
+            var padding = 20;
+            tempCanvas.width = Math.ceil(maxLineWidth) + padding * 2;
+            tempCanvas.height = Math.ceil(totalHeight) + padding * 2;
+
+            tempCtx.font = 'bold ' + FONT_SIZE + 'px "PingFang SC", "Microsoft YaHei", sans-serif';
+            tempCtx.textAlign = 'center';
+            tempCtx.textBaseline = 'middle';
+
+            for (var li = 0; li < lines.length; li++) {
+                var y = padding + li * lineHeight + lineHeight / 2;
+                tempCtx.fillStyle = '#fff';
+                tempCtx.fillText(lines[li], tempCanvas.width / 2, y);
+            }
+
+            var imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            var data = imageData.data;
+            var pixelPositions = [];
+
+            for (var py = 0; py < tempCanvas.height; py += PARTICLE_GAP) {
+                for (var px = 0; px < tempCanvas.width; px += PARTICLE_GAP) {
+                    var idx = (py * tempCanvas.width + px) * 4;
+                    if (data[idx + 3] > 128) {
+                        pixelPositions.push({
+                            x: px,
+                            y: py
+                        });
+                    }
+                }
+            }
+
+            return {
+                positions: pixelPositions,
+                width: tempCanvas.width,
+                height: tempCanvas.height
+            };
+        }
+
+        function hslToRgb(h, s, l) {
+            var c = (1 - Math.abs(2 * l - 1)) * s;
+            var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+            var m = l - 0.5 * c;
+            var r, g, b;
+            if (h < 60) { r = c; g = x; b = 0; }
+            else if (h < 120) { r = x; g = c; b = 0; }
+            else if (h < 180) { r = 0; g = c; b = x; }
+            else if (h < 240) { r = 0; g = x; b = c; }
+            else if (h < 300) { r = x; g = 0; b = c; }
+            else { r = c; g = 0; b = x; }
+            return {
+                r: Math.round((r + m) * 255),
+                g: Math.round((g + m) * 255),
+                b: Math.round((b + m) * 255)
+            };
+        }
+
+        function launchTextFirework(text) {
+            text = text.trim();
+            if (!text) {
+                showError('请输入祝福语');
+                return;
+            }
+            if (text.length > MAX_CHARS) {
+                showError('祝福语不能超过' + MAX_CHARS + '个字符，当前' + text.length + '字');
+                return;
+            }
+
+            var result = extractTextPixels(text);
+            if (result.positions.length === 0) {
+                showError('无法解析文字，请重新输入');
+                return;
+            }
+
+            var offsetX = (textCanvas.width - result.width) / 2;
+            var offsetY = (textCanvas.height - result.height) / 2 - textCanvas.height * 0.05;
+
+            var baseHue = Math.random() * 360;
+            particles = [];
+
+            for (var i = 0; i < result.positions.length; i++) {
+                var pos = result.positions[i];
+                var targetX = pos.x + offsetX;
+                var targetY = pos.y + offsetY;
+
+                var startX = Math.random() * textCanvas.width;
+                var startY = textCanvas.height + Math.random() * 200;
+
+                var color = hslToRgb((baseHue + Math.random() * 60 - 30 + 360) % 360, 0.9, 0.6);
+
+                particles.push({
+                    x: startX,
+                    y: startY,
+                    startX: startX,
+                    startY: startY,
+                    targetX: targetX,
+                    targetY: targetY,
+                    r: color.r,
+                    g: color.g,
+                    b: color.b,
+                    size: Math.random() * 1.5 + 2,
+                    scatterVx: (Math.random() - 0.5) * 12,
+                    scatterVy: (Math.random() - 0.5) * 10 - 3,
+                    alpha: 1
+                });
+            }
+
+            animating = true;
+            animStartTime = performance.now();
+            launchBtn.disabled = true;
+            blessingInput.disabled = true;
+            inputPanel.classList.add('hidden');
+        }
+
+        function easeOutCubic(t) {
+            return 1 - Math.pow(1 - t, 3);
+        }
+
+        function easeInCubic(t) {
+            return t * t * t;
+        }
+
+        function animateTextParticles(timestamp) {
+            if (!animating) {
+                requestAnimationFrame(animateTextParticles);
+                return;
+            }
+
+            var elapsed = timestamp - animStartTime;
+            var totalDuration = GATHER_DURATION + HOLD_DURATION + SCATTER_DURATION;
+
+            if (elapsed >= totalDuration) {
+                animating = false;
+                particles = [];
+                ctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+                launchBtn.disabled = false;
+                blessingInput.disabled = false;
+                blessingInput.value = '';
+                inputPanel.classList.remove('hidden');
+                requestAnimationFrame(animateTextParticles);
+                return;
+            }
+
+            ctx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+
+            for (var i = 0; i < particles.length; i++) {
+                var p = particles[i];
+                var drawX, drawY, alpha, size;
+
+                if (elapsed < GATHER_DURATION) {
+                    var t = easeOutCubic(elapsed / GATHER_DURATION);
+                    drawX = p.startX + (p.targetX - p.startX) * t;
+                    drawY = p.startY + (p.targetY - p.startY) * t;
+                    alpha = Math.min(1, elapsed / (GATHER_DURATION * 0.3));
+                    size = p.size * (0.5 + 0.5 * t);
+                } else if (elapsed < GATHER_DURATION + HOLD_DURATION) {
+                    var holdElapsed = elapsed - GATHER_DURATION;
+                    var holdT = holdElapsed / HOLD_DURATION;
+                    drawX = p.targetX + Math.sin(holdT * Math.PI * 4 + i * 0.01) * 0.8;
+                    drawY = p.targetY + Math.cos(holdT * Math.PI * 3 + i * 0.01) * 0.8;
+                    var pulse = 1 + Math.sin(holdT * Math.PI * 6) * 0.15;
+                    alpha = 1;
+                    size = p.size * pulse;
+
+                    if (holdT < 0.15) {
+                        var glowAlpha = (1 - holdT / 0.15) * 0.6;
+                        ctx.fillStyle = 'rgba(' + p.r + ',' + p.g + ',' + p.b + ',' + glowAlpha + ')';
+                        ctx.beginPath();
+                        ctx.arc(drawX, drawY, size * 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                } else {
+                    var scatterElapsed = elapsed - GATHER_DURATION - HOLD_DURATION;
+                    var scatterT = scatterElapsed / SCATTER_DURATION;
+                    var easedScatter = easeInCubic(scatterT);
+                    drawX = p.targetX + p.scatterVx * easedScatter * 150;
+                    drawY = p.targetY + p.scatterVy * easedScatter * 150 + 0.5 * 9.8 * Math.pow(easedScatter * 2, 2) * 20;
+                    alpha = 1 - easeInCubic(scatterT);
+                    size = p.size * (1 - scatterT * 0.5);
+                }
+
+                if (alpha <= 0.01) continue;
+
+                ctx.fillStyle = 'rgba(' + p.r + ',' + p.g + ',' + p.b + ',' + alpha + ')';
+                ctx.beginPath();
+                ctx.arc(drawX, drawY, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            requestAnimationFrame(animateTextParticles);
+        }
+
+        launchBtn.addEventListener('click', function() {
+            launchTextFirework(blessingInput.value);
+        });
+
+        blessingInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                launchTextFirework(blessingInput.value);
+            }
+        });
+
+        requestAnimationFrame(animateTextParticles);
+    })();
+    </script>
 </body>
 </html>
